@@ -1,4 +1,3 @@
-
 import serial
 import csv
 from datetime import datetime
@@ -7,7 +6,7 @@ import time
 
 SERIAL_PORT = 'COM13'  
 BAUD_RATE = 9600
-CSV_FILE = 'parking_slots.csv'
+CSV_FILE = 'data2.csv'
 
 def initialize_csv(file_path):
     headers = ['slot', 'status', 'in_time', 'out_time']
@@ -19,7 +18,6 @@ def initialize_csv(file_path):
                 writer.writerow({'slot': str(i), 'status': '0', 'in_time': '', 'out_time': ''})
 
 def load_parking_data(file_path):
-    """Load parking data into a dictionary."""
     with open(file_path, 'r') as f:
         reader = csv.DictReader(f)
         return {row['slot']: row for row in reader}
@@ -39,12 +37,16 @@ RFID_TO_SLOT = {
     'c390d2f8': '5'
 }
 
+def log_occupancy(parking_data):
+    occupied_slots = sum(1 for slot in parking_data.values() if slot['status'] == '1')
+    print(f"📊 Current Occupancy: {occupied_slots}/{len(parking_data)} slots occupied.")
+
 def main():
     initialize_csv(CSV_FILE)
     parking_data = load_parking_data(CSV_FILE)
 
     arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    time.sleep(2)  
+    time.sleep(2) 
 
     print("Listening for RFID tags...")
 
@@ -59,16 +61,19 @@ def main():
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     current_status = parking_data[slot]['status']
 
-                    if current_status == '0':
+                    if current_status == '0':  
                         parking_data[slot]['status'] = '1'
                         parking_data[slot]['in_time'] = now
+                        parking_data[slot]['out_time'] = '' 
                         print(f"Slot {slot}: Car entered at {now}")
-                    else:
+                    else:  
                         parking_data[slot]['status'] = '0'
                         parking_data[slot]['out_time'] = now
                         print(f"Slot {slot}: Car exited at {now}")
 
                     write_parking_data(CSV_FILE, parking_data)
+
+                    log_occupancy(parking_data)
                 else:
                     print(f"Unknown RFID tag: {tag}")
 
