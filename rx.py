@@ -20,7 +20,7 @@ def initialize_csv():
         with open(CSV_FILE, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['slot', 'status', 'in_time', 'out_time'])
-            for i in range(1, 7):
+            for i in range(1, 6):  
                 writer.writerow([str(i), '0', '', ''])
 
 def read_csv():
@@ -33,7 +33,7 @@ def write_csv(rows):
         writer.writeheader()
         writer.writerows(rows)
 
-def update_slot(tag):
+def update_slot_with_rfid(tag):
     slot = RFID_TO_SLOT.get(tag)
     if not slot:
         print(f"⚠️ Unknown RFID tag: {tag}")
@@ -44,12 +44,12 @@ def update_slot(tag):
 
     for row in rows:
         if row['slot'] == slot:
-            if row['status'] == '0':  # Car entering
+            if row['status'] == '0':  
                 row['status'] = '1'
                 row['in_time'] = now
                 row['out_time'] = ''
                 print(f"[IN ] Slot {slot} at {now}")
-            else:  # Car exiting
+            else:  
                 row['status'] = '0'
                 row['out_time'] = now
                 print(f"[OUT] Slot {slot} at {now}")
@@ -57,18 +57,51 @@ def update_slot(tag):
 
     write_csv(rows)
 
-# --- MAIN EXECUTION ---
+def update_sensor_status(sensor_data):
+    sensor_values = sensor_data.split(',')
+    if len(sensor_values) != 5:
+        print(f"⚠️ Invalid sensor data: {sensor_data}")
+        return
+
+    rows = read_csv()
+    for i in range(5): 
+        rows[i]['status'] = sensor_values[i].strip()
+    write_csv(rows)
+    print(f"📊 Sensor data updated: {sensor_values}")
+
 initialize_csv()
 
 try:
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    print("📡 Listening for RFID tags...")
+    print("📡 Listening for RFID tags and sensor data...")
+
+    expecting_rfid = False
 
     while True:
-        tag = ser.readline().decode('utf-8', errors='ignore').strip().lower()
-        if tag:
-            print(f"🔖 Tag detected: {tag}")
-            update_slot(tag)
+        line = ser.readline().decode('utf-8', errors='ignore').strip().lower()
+
+        if not line:
+            continue
+
+        if line == 'car enter':
+            expecting_rfid = True
+            print("🚗 Entry detected. Waiting for RFID scan...")
+
+        elif expecting_rfid:
+            print(f"🔖 RFID received: {line}")
+            update_slot_with_rfid(line)
+            
+            ser.write(b'T')
+            print("✅ Sent 'T' to ESP32 indicating car entry.")
+
+            expecting_rfid = False
+
+        elif ',' in line:  # Sensor data received
+            print(f"📥 Sensor string received: {line}")
+            update_sensor_status(line)
+
+        else:
+            print(f"❓ Unknown input: {line}")
 
 except serial.SerialException as e:
     print(f"❌ Serial error: {e}")
