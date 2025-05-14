@@ -1,109 +1,81 @@
+
 import serial
 import csv
 from datetime import datetime
 import os
+import time
 
 SERIAL_PORT = 'COM13'  
 BAUD_RATE = 9600
-CSV_FILE = 'data2.csv'
+CSV_FILE = 'parking_slots.csv'
 
-RFID_TO_SLOT = {
-    '23b8caf8': '1',
-    '73d6ba15': '2',
-    'c390d2f8': '3',
-    '838bb915': '4',
-    'f7ee6a62': '5'
-}
-
-def initialize_csv():
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['slot', 'status', 'in_time', 'out_time'])
+def initialize_csv(file_path):
+    headers = ['slot', 'status', 'in_time', 'out_time']
+    if not os.path.isfile(file_path):
+        with open(file_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
             for i in range(1, 6):  
-                writer.writerow([str(i), '0', '', ''])
+                writer.writerow({'slot': str(i), 'status': '0', 'in_time': '', 'out_time': ''})
 
-def read_csv():
-    with open(CSV_FILE, 'r', newline='') as f:
-        return list(csv.DictReader(f))
+def load_parking_data(file_path):
+    """Load parking data into a dictionary."""
+    with open(file_path, 'r') as f:
+        reader = csv.DictReader(f)
+        return {row['slot']: row for row in reader}
 
-def write_csv(rows):
-    with open(CSV_FILE, 'w', newline='') as f:
+def write_parking_data(file_path, data):
+    with open(file_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['slot', 'status', 'in_time', 'out_time'])
         writer.writeheader()
-        writer.writerows(rows)
+        for slot in sorted(data.keys(), key=int):
+            writer.writerow(data[slot])
 
-def update_slot_with_rfid(tag):
-    slot = RFID_TO_SLOT.get(tag)
-    if not slot:
-        print(f"⚠️ Unknown RFID tag: {tag}")
-        return
+RFID_TO_SLOT = {
+    '23b8caf8': '1',  
+    '73d6ba15': '2',
+    'f7ee6a62': '3',
+    '838bb915': '4',
+    'c390d2f8': '5'
+}
 
-    now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    rows = read_csv()
+def main():
+    initialize_csv(CSV_FILE)
+    parking_data = load_parking_data(CSV_FILE)
 
-    for row in rows:
-        if row['slot'] == slot:
-            if row['status'] == '0':  
-                row['status'] = '1'
-                row['in_time'] = now
-                row['out_time'] = ''
-                print(f"[IN ] Slot {slot} at {now}")
-            else:  
-                row['status'] = '0'
-                row['out_time'] = now
-                print(f"[OUT] Slot {slot} at {now}")
-            break
+    arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    time.sleep(2)  
 
-    write_csv(rows)
+    print("Listening for RFID tags...")
 
-def update_sensor_status(sensor_data):
-    sensor_values = sensor_data.split(',')
-    if len(sensor_values) != 5:
-        print(f"⚠️ Invalid sensor data: {sensor_data}")
-        return
+    try:
+        while True:
+            if arduino.in_waiting > 0:
+                tag = arduino.readline().decode('utf-8').strip().lower()
+                print(f"Received tag: {tag}")
 
-    rows = read_csv()
-    for i in range(5): 
-        rows[i]['status'] = sensor_values[i].strip()
-    write_csv(rows)
-    print(f"📊 Sensor data updated: {sensor_values}")
+                slot = RFID_TO_SLOT.get(tag)
+                if slot:
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    current_status = parking_data[slot]['status']
 
-initialize_csv()
+                    if current_status == '0':
+                        parking_data[slot]['status'] = '1'
+                        parking_data[slot]['in_time'] = now
+                        print(f"Slot {slot}: Car entered at {now}")
+                    else:
+                        parking_data[slot]['status'] = '0'
+                        parking_data[slot]['out_time'] = now
+                        print(f"Slot {slot}: Car exited at {now}")
 
-try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    print("📡 Listening for RFID tags and sensor data...")
+                    write_parking_data(CSV_FILE, parking_data)
+                else:
+                    print(f"Unknown RFID tag: {tag}")
 
-    expecting_rfid = False
+    except KeyboardInterrupt:
+        print("Stopping.")
+    finally:
+        arduino.close()
 
-    while True:
-        line = ser.readline().decode('utf-8', errors='ignore').strip().lower()
-
-        if not line:
-            continue
-
-        if line == 'car enter':
-            expecting_rfid = True
-            print("🚗 Entry detected. Waiting for RFID scan...")
-
-        elif expecting_rfid:
-            print(f"🔖 RFID received: {line}")
-            update_slot_with_rfid(line)
-            
-            ser.write(b'T')
-            print("✅ Sent 'T' to ESP32 indicating car entry.")
-
-            expecting_rfid = False
-
-        elif ',' in line:  # Sensor data received
-            print(f"📥 Sensor string received: {line}")
-            update_sensor_status(line)
-
-        else:
-            print(f"❓ Unknown input: {line}")
-
-except serial.SerialException as e:
-    print(f"❌ Serial error: {e}")
-except Exception as ex:
-    print(f"❌ Unexpected error: {ex}")
+if __name__ == "__main__":
+    main()
